@@ -42,32 +42,71 @@ class Winch:
         self.last_time = time
 
 
+
+class PIDController:
+    def __init__(self, kp, ki, kd, max_abs):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.limit_pos = max_abs
+        self.limit_neg = -max_abs
+
+        self.last_time = 0
+        self.last_error = 0.0
+        self.integrated_error = 0.0
+    
+    def step(self, time, error):
+        proportinal = self.kp * error
+
+        dt = time - self.last_time
+
+        if dt > 0:
+            self.integrated_error += error * dt
+            integral = self.ki * self.integrated_error
+
+            d = (error - self.last_error) / dt
+            derivative = self.kd * d
+        else:
+            integral = 0.0
+            derivative = 0.0
+        
+        self.last_time = time
+        self.last_error = error
+
+        result = proportinal + integral + derivative
+
+        return max(self.limit_neg, min(self.limit_pos, result))
+
+
+
 class Driver:
     def __init__(self):
-        self.last_time = 0
         self.voltage = 0
 
         self.on_counter = 0
         self.off_counter = 0
         self.pwm_steps = 10
         self.slope_length = 20.0
+
+        self.pid = PIDController(0.5, 0.0, 0.1, 1.0)
     
     def step(self, time, position, target_position):
-
-        pos_delta_mm = (target_position - position) * 1000.0
-
+        # check whether a PWM cycle is finished
         if self.on_counter <= 0 and self.off_counter <= 0:
-            power = min(abs(pos_delta_mm), self.slope_length)
-            power_relative = int(power / self.slope_length * self.pwm_steps)
+            # compute new controller output
+            pos_delta_mm = (target_position - position) * 1000.0
+            y = self.pid.step(time, pos_delta_mm)
+            power_pwm = int(y * self.pwm_steps)
 
-            self.on_counter = power_relative
+            self.on_counter = abs(power_pwm)
             self.off_counter = self.pwm_steps - self.on_counter
 
             if self.on_counter > 0:
-                self.voltage = sign(pos_delta_mm) * 10
+                self.voltage = sign(power_pwm) * 10
             else:
                 self.voltage = 0
         else:
+            # PWM still running
             if self.on_counter > 0:
                 # keep voltage high
                 self.on_counter -= 1
@@ -75,7 +114,6 @@ class Driver:
                 self.voltage = 0
                 self.off_counter -= 1
         
-        self.last_time = time
 
 
 
@@ -83,16 +121,16 @@ def get_target_position(t):
     target_mm = 0
     if t < 1.0:
         pass
-    elif t < 5.0:
+    elif t < 4.0:
         target_mm = 100
-    else:
+    elif t < 7.0:
         target_mm = 120
+    else:
+        target_mm = 50
     
     return target_mm / 1000.0 # convert to m
 
 
-def generate_position_ramp(t0, start_position, target_position):
-    pass
 
 
 x_values = list()
