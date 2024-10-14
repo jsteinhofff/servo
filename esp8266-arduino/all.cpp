@@ -3,6 +3,8 @@
 
 int debug = 1;
 int counter = 0;
+uint32_t interruptTicks = 0;
+uint32_t interruptSpacing = 0;
 
 #define ENCODER_A 4
 #define ENCODER_B 5
@@ -21,9 +23,14 @@ int counter = 0;
 
 
 ICACHE_RAM_ATTR void interruptHandler() {
+    uint32_t beginTicks = getClockTicks();
     counter += 1;
 
     updateEncoder();
+    uint32_t endTicks = getClockTicks();
+
+    // works, even if endTicks has overflown and beginTicks didnt
+    interruptTicks = endTicks - beginTicks;
 }
 
 
@@ -46,8 +53,14 @@ void setup()
 
     pinMode(ENCODER_A, INPUT_PULLUP);
     pinMode(ENCODER_B, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_A), interruptHandler, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(ENCODER_B), interruptHandler, CHANGE);
+    
+    timer1_attachInterrupt(interruptHandler);
+
+    // 80 MHz / 256 = 312.5Khz (1 tick = 3.2us)
+    timer1_enable(TIM_DIV256, TIM_EDGE, TIM_LOOP);
+    uint32_t timerTicks = 10;
+    timer1_write(timerTicks);
+    interruptSpacing = timerTicks * 256;
 
     pinMode(BUTTON_RESET, OUTPUT);
     digitalWrite(BUTTON_RESET, LOW);
@@ -73,6 +86,7 @@ enum State state = STATE_INITIAL;
 
 void loop()
 {
+    Serial.printf("Interrupt ticks: %u corresponds to %d percent load\n", interruptTicks, interruptTicks * 100 / interruptSpacing);
     if (state == STATE_INITIAL)
     {
         int button = detectButton();
