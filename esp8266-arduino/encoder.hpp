@@ -1,8 +1,8 @@
 
 
-int angle = 0;
+int encoder_increments = 0;
 
-ICACHE_RAM_ATTR inline void updateEncoder()
+ICACHE_RAM_ATTR inline void encoder_step()
 {
     // the old value of the sensor ports
     static unsigned char ab = 0;
@@ -16,6 +16,6 @@ ICACHE_RAM_ATTR inline void updateEncoder()
 
     ab = ab << 2;
     ab |= (port & 0x3);
-    angle += table[(ab & 0xf)];
+    encoder_increments += table[(ab & 0xf)];
 }
 

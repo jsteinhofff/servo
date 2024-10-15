@@ -2,7 +2,7 @@
 
 
 
-void collectAnalogValues(int *values)
+void collect_analog_values(int *values)
 {
     for (int i = 0; i < 5; i++)
     {
@@ -21,7 +21,7 @@ int min(int a, int b)
     return (a < b) ? a : b;
 }
 
-int getMedianOf5(int arr[])
+int get_median_of_5(int arr[])
 {
     int a = arr[0], b = arr[1], c = arr[2], d = arr[3], e = arr[4];
     int m1 = max(min(a, b), min(c, d));
@@ -29,12 +29,12 @@ int getMedianOf5(int arr[])
     return max(min(m1, m2), min(max(m1, m2), e));
 }
 
-int detectButton()
+int detect_button()
 {
     static int values[5] = {0};
-    collectAnalogValues(&values[0]);
+    collect_analog_values(&values[0]);
 
-    int median = getMedianOf5(values);
+    int median = get_median_of_5(values);
 
     if (median < 10)
     {
@@ -43,10 +43,10 @@ int detectButton()
 
     enum
     {
-        buttonCount = 4
+        button_count = 4
     };
 
-    int buttonRanges[buttonCount][2] = {
+    int button_ranges[button_count][2] = {
         {200, 400},
         {520, 620},
         {720, 820},
@@ -54,10 +54,10 @@ int detectButton()
 
     int button = 0;
 
-    for (int i = 0; i < buttonCount; i++)
+    for (int i = 0; i < button_count; i++)
     {
-        int lower = buttonRanges[i][0];
-        int upper = buttonRanges[i][1];
+        int lower = button_ranges[i][0];
+        int upper = button_ranges[i][1];
         if ((lower <= median) && (median <= upper))
         {
             button = i + 1;
