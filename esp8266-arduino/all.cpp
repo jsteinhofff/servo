@@ -2,9 +2,13 @@
 
 
 int debug = 1;
-int interrupt_counter = 0;
-uint32_t interrupt_ticks = 0;
-uint32_t interrupt_spacing = 0;
+bool run_tests = true;
+bool welcome_shown = false;
+volatile int interrupt_counter = 0;
+volatile uint32_t interrupt_ticks = 0;
+volatile uint32_t interrupt_spacing = 0;
+volatile float current_position = 0.0;
+
 
 #define ENCODER_A 4
 #define ENCODER_B 5
@@ -14,6 +18,7 @@ uint32_t interrupt_spacing = 0;
 
 
 #include "utils.hpp"
+#include "fixpoint.hpp"
 #include "buttons.hpp"
 #include "encoder.hpp"
 #include "motor.hpp"
@@ -28,11 +33,12 @@ ICACHE_RAM_ATTR void interrupt_handler() {
     interrupt_counter += 1;
     encoder_step();
 
-    float encoder_increments_per_rotation = 7.0;
-    float gear_ratio = 1.0 / 50.0;
+    // The way we are interpreting the encoder signals we get 4 increments per magnetic pulse
+    float encoder_increments_per_rotation = 7.0 * 4;
+    float gear_ratio = 29.125; // from datasheet it is 30, but when i wind it 10x i observe 8155 increments
     float pi = 3.1415193;
 
-    float current_position = (float) encoder_increments / encoder_increments_per_rotation / gear_ratio * 2 * pi;
+    current_position = (float) encoder_increments / encoder_increments_per_rotation / gear_ratio * 2.0 * pi;
     motor_step(get_clock_ticks(), current_position);
 
     digitalWrite(MOTOR_CONTROL_1, motor_out_a ? HIGH : LOW);
@@ -43,6 +49,8 @@ ICACHE_RAM_ATTR void interrupt_handler() {
     interrupt_ticks = end_ticks - begin_ticks;
 }
 
+
+uint32_t setup_end_ticks = 0;
 
 void setup()
 {
@@ -63,14 +71,20 @@ void setup()
 
     pinMode(ENCODER_A, INPUT_PULLUP);
     pinMode(ENCODER_B, INPUT_PULLUP);
+
+    if (run_tests) {
+        test_fixpoint();
+    }
     
     timer1_attachInterrupt(interrupt_handler);
 
     // 80 MHz / 256 = 312.5Khz (1 tick = 3.2us)
     timer1_enable(TIM_DIV256, TIM_EDGE, TIM_LOOP);
-    uint32_t timer_ticks = 1000;
+    uint32_t timer_ticks = 10;
     timer1_write(timer_ticks);
     interrupt_spacing = timer_ticks * 256;
+    // for 10 ticks counter with encoder, PID and motor
+    //   interrupt ticks: 1476 from 2560 corresponding to 57.656250 % load
 
     pinMode(BUTTON_RESET, OUTPUT);
     digitalWrite(BUTTON_RESET, LOW);
@@ -81,7 +95,8 @@ void setup()
     pinMode(MOTOR_CONTROL_2, OUTPUT);
     digitalWrite(MOTOR_CONTROL_2, LOW);
 
-    Serial.println("Started.");
+    Serial.println("Setup complete");
+    setup_end_ticks = get_clock_ticks();
 }
 
 enum State
@@ -96,17 +111,34 @@ enum State state = STATE_INITIAL;
 
 void loop()
 {
-    Serial.printf("Interrupt ticks: %u corresponds to %d percent load\n", interrupt_ticks, interrupt_ticks * 100 / interrupt_spacing);
+    Serial.printf(".");
+
+    uint32_t local_ticks = interrupt_ticks; // get a local copy such that interrupt does not change value inbetween output
+    float interrupt_load = local_ticks * 100.0 / interrupt_spacing;
+
+    if (!welcome_shown && (get_clock_ticks() > setup_end_ticks + 8000000)) {
+        // Show welcome message 100 ms after end of setup (to give interrupt chance to run)
+        Serial.printf("Welcome!\n");
+        Serial.printf("Running software from %s\n", __TIMESTAMP__);
+        Serial.printf("Interrupt ticks are %u from %u corresponding to %f %% load\n", local_ticks, interrupt_spacing, interrupt_load);
+        welcome_shown = true;
+    }
+
+    if (interrupt_load > 30.0) {
+        Serial.printf("HIGH INTERRUPT LOAD, interrupt ticks: %u corresponding to %f %% load\n", local_ticks, interrupt_load);
+    }
+
     if (state == STATE_INITIAL)
     {
         int button = detect_button();
+        //int button = 0;
+        
         if (button == 0)
         {
             delay(100);
         }
         else
         {
-            Serial.println(__TIMESTAMP__);
             if (button == 1)
             {
                 state = STATE_1;
@@ -126,7 +158,13 @@ void loop()
     }
     else if (state == STATE_1)
     {
-        motor_target_rad = 100.0;
+        motor_target_rad = 50.0;
+
+        for (int i = 0; i < 100; i++) {
+            Serial.printf("Pos %f , delta: %f , prop: %f, motor A: %d, motor B: %d\n", current_position, motor_position_delta, pid_proportional, motor_out_a, motor_out_b);
+            delay(500);
+        }
+
         state = STATE_INITIAL;
     }
     else if (state == STATE_2)

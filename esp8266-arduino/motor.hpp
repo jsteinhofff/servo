@@ -3,17 +3,20 @@
 #include <math.h>
 #include <stdlib.h>
 
-uint32_t motor_pwm_steps = 10;
+uint32_t motor_pwm_steps = 3;
 int32_t motor_on_counter = 0;
 int32_t motor_off_counter = 0;
 int32_t motor_out_a = 0;
 int32_t motor_out_b = 0;
 
 float motor_target_rad = 0.0;
+float motor_position_delta = 0.0;
 
 float pid_kp = 0.5;
 float pid_ki = 0.0;
-float pid_kd = 0.1;
+float pid_kd = 0.0;
+
+float pid_proportional = 0.0;
 
 float pid_limit_pos = 1.0;
 float pid_limit_neg = -1.0;
@@ -25,7 +28,7 @@ float pid_integrated_error = 0.0;
 
 
 
-ICACHE_RAM_ATTR float pid_step(float error, uint32_t ticks) {
+ICACHE_RAM_ATTR float pid_step(uint32_t ticks, float error) {
     float proportional = pid_kp * error;
 
     uint32_t deltaTicks = ticks - pid_last_ticks;
@@ -49,6 +52,7 @@ ICACHE_RAM_ATTR float pid_step(float error, uint32_t ticks) {
     pid_last_error = error;
 
     float result = proportional + integral + derivative;
+    pid_proportional = proportional;
 
     return fmaxf(pid_limit_neg, fminf(pid_limit_pos, result));
 }
@@ -63,6 +67,7 @@ ICACHE_RAM_ATTR void motor_step(uint32_t ticks, float position) {
     if ((motor_on_counter <= 0) && (motor_off_counter <= 0)) {
         // compute new controller output
         float position_delta = (motor_target_rad - position);
+        motor_position_delta = position_delta;
         float y = pid_step(ticks, position_delta);
         int32_t power_pwm = int32_t(y * (float) motor_pwm_steps);
 
