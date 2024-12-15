@@ -9,56 +9,12 @@ int32_t motor_off_counter = 0;
 int32_t motor_out_a = 0;
 int32_t motor_out_b = 0;
 
-float motor_target_rad = 0.0;
-float motor_position_delta = 0.0;
-
-float pid_kp = 0.5;
-float pid_ki = 0.0;
-float pid_kd = 0.0;
-
-float pid_proportional = 0.0;
-
-float pid_limit_pos = 1.0;
-float pid_limit_neg = -1.0;
-
-uint32 pid_last_ticks = 0;
-float pid_last_error = 0.0;
-float pid_integrated_error = 0.0;
+int32_t motor_target_ticks = 0;
+int32_t motor_delta_ticks = 0;
 
 
-
-
-ICACHE_RAM_ATTR float pid_step(uint32_t ticks, float error) {
-    float proportional = pid_kp * error;
-
-    uint32_t deltaTicks = ticks - pid_last_ticks;
-    float dt = (float) deltaTicks / 80000000.0;
-
-    float integral;
-    float derivative;
-
-    if (dt > 0.0) {
-        pid_integrated_error += error * dt;
-        integral = pid_ki * pid_integrated_error;
-
-        float d = (error - pid_last_error) / dt;
-        derivative = pid_kd * d;
-    } else {
-        integral = 0.0;
-        derivative = 0.0;
-    }
-
-    pid_last_ticks = ticks;
-    pid_last_error = error;
-
-    float result = proportional + integral + derivative;
-    pid_proportional = proportional;
-
-    return fmaxf(pid_limit_neg, fminf(pid_limit_pos, result));
-}
-
-ICACHE_RAM_ATTR void motor_step(uint32_t ticks, float position) {
-    if (motor_target_rad == 0.0) {
+ICACHE_RAM_ATTR void motor_step(uint32_t ticks, int32_t position) {
+    if (motor_target_ticks == 0) {
         // killswitch for target 0.0
         return;
     }
@@ -66,12 +22,11 @@ ICACHE_RAM_ATTR void motor_step(uint32_t ticks, float position) {
     // check whether a PWM cycle is finished
     if ((motor_on_counter <= 0) && (motor_off_counter <= 0)) {
         // compute new controller output
-        float position_delta = (motor_target_rad - position);
-        motor_position_delta = position_delta;
-        float y = pid_step(ticks, position_delta);
-        int32_t power_pwm = int32_t(y * (float) motor_pwm_steps);
+        int32_t position_delta = motor_target_ticks - position;
+        motor_delta_ticks = position_delta;
+        int32_t power_pwm = position_delta / 2;
 
-        motor_on_counter = abs(power_pwm);
+        motor_on_counter = min(abs(power_pwm), motor_pwm_steps);
         motor_off_counter = motor_pwm_steps - motor_on_counter;
 
         if (power_pwm > 0) {
@@ -94,6 +49,47 @@ ICACHE_RAM_ATTR void motor_step(uint32_t ticks, float position) {
             motor_out_b = 0;
             motor_off_counter--;
         }
+    }
+}
+
+
+// maximum acceleration, assuming we aim to go from 0 to 100 rpm in 1 s
+// a = 100 rpm / 1s = 100.0 / 60.0 rotations / 1s / 1s = 100.0 / 60.0 * (2 * pi) [rad / s^2]
+float a_m = 20.0 / 60.0 * (2 * pi);  // [rad/s^2]
+
+// maximum velocity, assuming 100 rpm
+float v_M = 50.0 / 60.0 * (2 * pi);  // [rad/s]
+
+void calculate_ramp_times(float position_offset, float start_velocity, float* t_a, float* t_v, float* t_d) {
+    // Implementation of doi:10.1088/1757-899X/294/1/012055 Chapter #2
+    // m is the ratio of acceleration to deceleration
+    float m = 1.0;
+    float s = position_offset;
+    float a = a_m;
+
+    float v_s = start_velocity;
+
+    float mp1 = m + 1.0;
+    float x = v_s * mp1 / a;
+    float T = -v_s * mp1 / a + sqrt(x * x + 2.0 * s * mp1 / a);
+
+    *t_a = T / mp1;
+    *t_d = T - *t_a;
+    float v = v_s + a * *t_a;
+    *t_v = 0.0;
+
+    if (v <= v_M) {
+        // triangular speed profile
+        // we are done
+    } else {
+        // trapezoidal speed profile
+        v = v_M;
+        *t_a = (v - v_s) / a;
+        float T_ad = *t_a * mp1;
+        *t_d = T_ad - *t_a;
+        float s_ad = v_s * T_ad + a * T_ad * T_ad / (2.0 * mp1);
+        *t_v = (s - s_ad) / v;
+        T = T_ad + *t_v;
     }
 }
 
