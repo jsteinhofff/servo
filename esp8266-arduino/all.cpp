@@ -4,7 +4,15 @@
 int debug = 1;
 bool run_tests = true;
 bool welcome_shown = false;
-volatile int interrupt_counter = 0;
+
+
+#include "utils.hpp"
+#include "buttons.hpp"
+#include "encoder.hpp"
+#include "motor.hpp"
+
+
+volatile int32_t interrupt_counter = 0;
 volatile uint32_t interrupt_ticks = 0;
 volatile uint32_t interrupt_spacing = 0;
 float interrupt_spacing_s = 0.0;
@@ -13,38 +21,44 @@ volatile uint32_t acceleration_end_interrupt_count = 0;
 volatile uint32_t constant_velocity_end_interrupt_count = 0;
 volatile uint32_t deceleration_end_interrupt_count = 0;
 
+float ramp_time_accelerate = 0.0;
+float ramp_time_constant = 0.0;
+float ramp_time_decelerate = 0.0;
 volatile int32_t ramp_constant_velocity = 0;
-volatile int32_t ramp_acceleration = 0;
+volatile int32_t ramp_acceleration_enc_per_intr_gibi = 0;
+volatile int32_t ramp_velocity_enc_per_intr_mibi = 0;
 volatile int32_t ramp_start_position = 0;
 volatile int32_t ramp_acceleration_end_position = 0;
 volatile int32_t ramp_constant_velocity_end_position = 0;
 
 
-// The way we are interpreting the encoder signals we get 4 increments per magnetic pulse
-float encoder_increments_per_rotation = 7.0 * 4;
-float gear_ratio = 29.125; // from datasheet it is 30, but when i wind it 10x i observe 8155 increments
+
 float winch_diameter = 15.0;
 
 
-#define ENCODER_A 4
-#define ENCODER_B 5
-#define BUTTON_RESET 12
-#define MOTOR_CONTROL_1 13
-#define MOTOR_CONTROL_2 14
+// derived values
+float rad_to_enc = encoder_increments_per_rotation / (2 * pi);
 
 
-// direct access to input ports as register
-// see https://github.com/esp8266/esp8266-wiki/wiki/gpio-registers
-// and https://www.embedded.com/device-registers-in-c/
-#define PIN_IN (*(uint32_t *)0x60000318)
-#define PIN_OUT (*(uint32_t *)0x60000300)
 
 
-#include "utils.hpp"
-#include "buttons.hpp"
-#include "encoder.hpp"
-#include "motor.hpp"
 
+
+inline int enc_by_intr(int i, int a_gibi, int v0_mibi, int enc0) {
+    // Calculate the desired encoder pulses based on the interrupt counter.
+    // 
+    // The actual formula is simply enc = 0.5 * i**2 * a + i * v0 + enc0
+    // but we do it in whole numbers and have to scale things around
+    // to prevent overflows on one hand and prevent loosing too much precision on the other hand.
+    int i_squeeze = i / 16;
+    int i_square_squeeze = i_squeeze * i;
+    int i_square_mibi = i_square_squeeze / 1024 / (1024 / 16);
+    int e = i_square_mibi * a_gibi;
+    int f = e / 2048;
+    int g = v0_mibi * i_squeeze / 1024  / (1024 / 16);
+    int h = g + enc0;
+    return f + h;
+}
 
 
 ICACHE_RAM_ATTR void interrupt_handler() {
@@ -54,34 +68,36 @@ ICACHE_RAM_ATTR void interrupt_handler() {
     ramp_interrupt_counter++;
     encoder_step();
 
-    uint32_t ramp_interrupt_counter_mibi = ramp_interrupt_counter / 1024;
+    // we blindly calculate the ramp and hope that the motor controller can
+    // follow...
     
     if (ramp_interrupt_counter < acceleration_end_interrupt_count) {
         // accelerating
 
-        // know how much velocity shall be increased per interrupt in some meaning unit * 1024
-        // ramp calculation was done with assuming maximum velocity 100 rpm ~ 10 rad/s
-        // in the interrupt we would
-        //      update the velocity and
-        //      then update the target position
-        //      then update the PID controller
-        motor_target_ticks = ramp_acceleration * ramp_interrupt_counter_mibi * ramp_interrupt_counter_mibi / 1024 / 1024;
-        ramp_acceleration_end_position = motor_target_ticks;
+        // with the current interrupt configuration, we have 62500 interrupts per second
+        // for a ramp of 1s this means we have to work with a square of this number which is 3`906`250`000
+        // which is scary close to 2^32 and it would be good to have some head room
+        // in case the interrupt gets configured differently or in case the ramp duration is increased.
+        // => at least a divisor of 16 seems appropriate bringing us down to 244`140`625 (for 1s)
+        // => more than 8s ramp possible with Int32 (=31 bits available)
 
-
+        motor_target_ticks = enc_by_intr(ramp_interrupt_counter, ramp_acceleration_enc_per_intr_gibi, 0, ramp_start_position);
+    
     } else if (ramp_interrupt_counter < constant_velocity_end_interrupt_count) {
         // constant velocity
-
         int32_t constant_counter = ramp_interrupt_counter - acceleration_end_interrupt_count;
-        motor_target_ticks = ramp_acceleration_end_position + ramp_constant_velocity * constant_counter;
-        ramp_constant_velocity_end_position = motor_target_ticks;
+
+        motor_target_ticks = enc_by_intr(constant_counter, 0, ramp_velocity_enc_per_intr_mibi, ramp_acceleration_end_position);
     } else if (ramp_interrupt_counter < deceleration_end_interrupt_count) {
         // decelerating
         int32_t deceleration_counter = ramp_interrupt_counter - constant_velocity_end_interrupt_count;
-        motor_target_ticks = ramp_constant_velocity_end_position + ramp_acceleration * deceleration_counter * deceleration_counter;
+        
+        motor_target_ticks = enc_by_intr(deceleration_counter, -ramp_acceleration_enc_per_intr_gibi, ramp_velocity_enc_per_intr_mibi, ramp_constant_velocity_end_position);
+    } else {
+        // TODO: drive is done, disable counters, such that they dont go crazy when they overflow
     }
 
-    motor_step(get_clock_ticks(), encoder_increments);
+    motor_step(encoder_increments);
 
     uint32_t pins_out = PIN_OUT;
     SET_BIT_IF(pins_out, MOTOR_CONTROL_1, motor_out_a)
@@ -91,6 +107,46 @@ ICACHE_RAM_ATTR void interrupt_handler() {
     uint32_t end_ticks = get_clock_ticks();
     // difference is correct, even if end_ticks has overflown and begin_ticks didnt
     interrupt_ticks = end_ticks - begin_ticks;
+}
+
+
+void setup_drive(float winch_target_mm) {
+    float winch_rotations = winch_target_mm / winch_diameter / pi;
+    float winch_radians = winch_rotations * 2.0 * pi;
+    int direction = sign(winch_radians);
+    Serial.printf("winch_radians: %f with abs: %f\n", winch_radians, fabs(winch_radians));
+
+    ramp_time_accelerate = 0.0;
+    ramp_time_constant = 0.0;
+    ramp_time_decelerate = 0.0;
+
+    // the ramp times are calculated based on what is supposed to happen at the winch
+    calculate_ramp_times(fabs(winch_radians), 0.0, v_max_winch, a_winch, &ramp_time_accelerate, &ramp_time_constant, &ramp_time_decelerate);
+    
+    // again convert to the unit we can use in the interrupt handler (interrupt counts)
+    acceleration_end_interrupt_count = ramp_time_accelerate / interrupt_spacing_s;
+    constant_velocity_end_interrupt_count = ramp_time_constant / interrupt_spacing_s + acceleration_end_interrupt_count;
+    deceleration_end_interrupt_count = ramp_time_decelerate / interrupt_spacing_s + constant_velocity_end_interrupt_count;
+
+
+    // prepare the velocity and acceleration in the unit we can most efficiently use in the interrupt handler
+    float v_const_motor_intr = a_motor * ramp_time_accelerate * interrupt_spacing_s;
+    ramp_velocity_enc_per_intr_mibi = direction * v_const_motor_intr * rad_to_enc * 1024.0 * 1024.0;
+
+    float acceleration_enc_per_intr = a_motor * rad_to_enc * interrupt_spacing_s * interrupt_spacing_s;
+    ramp_acceleration_enc_per_intr_gibi = direction * acceleration_enc_per_intr * (1024.0 * 1024.0 * 1024.0);
+
+    ramp_interrupt_counter = 0;
+    ramp_start_position = encoder_increments;
+    ramp_acceleration_end_position = enc_by_intr(acceleration_end_interrupt_count,
+                                                    ramp_acceleration_enc_per_intr_gibi, // a
+                                                    0, // v0
+                                                    ramp_start_position);
+
+    ramp_constant_velocity_end_position = enc_by_intr(constant_velocity_end_interrupt_count - acceleration_end_interrupt_count,
+                                                        0, // a
+                                                        ramp_velocity_enc_per_intr_mibi, // v0
+                                                        ramp_acceleration_end_position);
 }
 
 
@@ -136,7 +192,6 @@ void setup()
     //   interrupt ticks: 549 corresponding to 42.890625 % load
     //   interrupt ticks: 576 corresponding to 45.000000 % load
     // ... some optimizations
-    
 
     pinMode(BUTTON_RESET, OUTPUT);
     digitalWrite(BUTTON_RESET, LOW);
@@ -176,7 +231,7 @@ void loop()
         welcome_shown = true;
     }
 
-    if (interrupt_load > 20.0) {
+    if (interrupt_load > 30.0) {
         Serial.printf("HIGH INTERRUPT LOAD, interrupt ticks: %u corresponding to %f %% load\n", local_ticks, interrupt_load);
     }
 
@@ -210,67 +265,30 @@ void loop()
     }
     else if (state == STATE_1)
     {
-        float winch_target_mm = 200.0;
-        float winch_rotations = winch_target_mm / winch_diameter / pi;
-        float winch_radians = winch_rotations * 2.0 * pi;
-        //motor_target_ticks = winch_rotations * gear_ratio * encoder_increments_per_rotation;
-
-        float ramp_time_accelerate = 0.0;
-        float ramp_time_constant = 0.0;
-        float ramp_time_decelerate = 0.0;
-
-        calculate_ramp_times(winch_radians, 0.0, &ramp_time_accelerate, &ramp_time_constant, &ramp_time_decelerate);
-
-        // acceleration phase:
-        // know how much velocity shall be increased per interrupt in some meaning unit * 1024
-        // ramp calculation was done with assuming maximum velocity 100 rpm ~ 10 rad/s
-        // in the interrupt we would
-        //      update the velocity and
-        //      then update the target position
-        //      then update the PID controller
-        
-        uint32_t now_ticks = get_clock_ticks();
-        acceleration_end_interrupt_count = ramp_time_accelerate / interrupt_spacing_s;
-        constant_velocity_end_interrupt_count = ramp_time_constant / interrupt_spacing_s + acceleration_end_interrupt_count;
-        deceleration_end_interrupt_count = ramp_time_decelerate / interrupt_spacing_s + constant_velocity_end_interrupt_count;
-
-        ramp_constant_velocity = 0; // how about [encoder increments / 1024 interrupts]
-        // a_m is [rad/s^2] so
-        //     / (2 pi) * encoder_increments_per_rotation to get to encoder increments
-        //     * interrupt_spacing_s^2 to get to interrupts^2
-        float interrupt_spacing_mibis = interrupt_spacing_s * 1024.0;
-        float acceleration_enc_per_intr = sign(winch_radians) * a_m / (2 * pi) * encoder_increments_per_rotation * interrupt_spacing_mibis * interrupt_spacing_mibis * 1024 * 1024; // [1/1024^2 * enc increments / interrupt times mibi^2]
-        ramp_acceleration = (int) acceleration_enc_per_intr;
-        ramp_interrupt_counter = 0;
-        ramp_start_position = 0;
-        ramp_acceleration_end_position = 0;
-
-        Serial.printf("RAMP START\n");
-        Serial.printf("Times: Acceleration %f s, Constant %f s, Deceleration: %f s\n", ramp_time_accelerate, ramp_time_constant, ramp_time_decelerate);
-        Serial.printf("Ramp acceleration %f [enc incs/interrupts^2]\n", acceleration_enc_per_intr);
-        Serial.printf("Interrupt interval %f s\n", interrupt_spacing_s);
-
+        float destination = 150.0; // mm
         for (int i = 0; i < 100; i++) {
-            Serial.printf("Pos %d , delta: %d , motor A: %d, motor B: %d\n", encoder_increments, motor_delta_ticks, motor_out_a, motor_out_b);
-            delay(500);
+            setup_drive(destination * (((i + 1) % 2) * 2 - 1));
+
+            Serial.printf("RAMP START\n");
+            Serial.printf("Times: Acceleration %f s, Constant %f s, Deceleration: %f s\n", ramp_time_accelerate, ramp_time_constant, ramp_time_decelerate);
+            Serial.printf("Ramp acceleration %d [enc incs/interrupts^2/2^30]\n", ramp_acceleration_enc_per_intr_gibi);
+            Serial.printf("Constant velocity %d [enc incs/interrupts/2^20]\n", ramp_velocity_enc_per_intr_mibi);
+            Serial.printf("Interrupt interval %f s\n", interrupt_spacing_s);
+
+            for (int i = 0; i < 100; i++) {
+                Serial.printf("Pos %d , delta: %d , motor A: %d, motor B: %d\n", encoder_increments, motor_delta_ticks, motor_out_a, motor_out_b);
+                delay(100);
+            }
         }
 
         state = STATE_INITIAL;
     }
     else if (state == STATE_2)
     {
-        
-        motor_target_ticks = 0;
         state = STATE_INITIAL;
     }
     else if (state == STATE_3)
     {
-        Serial.print("Interrupt counter: ");
-        Serial.println(interrupt_counter);
-        Serial.print("Encoder angle: ");
-        Serial.println(encoder_increments);
-        interrupt_counter = 0;
-        motor_target_ticks = 0;
         state = STATE_INITIAL;
     }
     yield;

@@ -1,4 +1,20 @@
 
+
+
+#define ENCODER_A 4
+#define ENCODER_B 5
+#define BUTTON_RESET 12
+#define MOTOR_CONTROL_1 13
+#define MOTOR_CONTROL_2 14
+
+
+// direct access to input ports as register
+// see https://github.com/esp8266/esp8266-wiki/wiki/gpio-registers
+// and https://www.embedded.com/device-registers-in-c/
+#define PIN_IN (*(uint32_t *)0x60000318)
+#define PIN_OUT (*(uint32_t *)0x60000300)
+
+
 // Access the CPU Clock counter
 // taken from https://sub.nanona.fi/esp8266/timing-and-ticks.html
 // Note: Overflows every 53.6870912 seconds!

@@ -47,8 +47,6 @@ v_max_winch = 100.0 / 60.0 * (2 * math.pi)  # [rad/s]
 
 winch_target_mm = 200.0
 
-acceleration_time = 0.0 # [s]
-
 
 ##
 ## derived
