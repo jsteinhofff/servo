@@ -89,20 +89,20 @@ ICACHE_RAM_ATTR void interrupt_handler() {
     interrupt_counter++;
     ramp_interrupt_counter++;
     encoder_step();
-
+    
     if (!ramp_done && !ramp_overload) {
-    if (ramp_interrupt_counter < acceleration_end_interrupt_count) {
-        // accelerating
-        motor_target_ticks = enc_by_intr(ramp_interrupt_counter, ramp_acceleration_enc_per_intr_gibi, 0, ramp_start_position);
-    } else if (ramp_interrupt_counter < constant_velocity_end_interrupt_count) {
-        // constant velocity
-        int32_t constant_counter = ramp_interrupt_counter - acceleration_end_interrupt_count;
-        motor_target_ticks = enc_by_intr(constant_counter, 0, ramp_velocity_enc_per_intr_mibi, ramp_acceleration_end_position);
-    } else if (ramp_interrupt_counter < deceleration_end_interrupt_count) {
-        // decelerating
-        int32_t deceleration_counter = ramp_interrupt_counter - constant_velocity_end_interrupt_count;
-        motor_target_ticks = enc_by_intr(deceleration_counter, -ramp_acceleration_enc_per_intr_gibi, ramp_velocity_enc_per_intr_mibi, ramp_constant_velocity_end_position);
-    } else {
+        if (ramp_interrupt_counter < acceleration_end_interrupt_count) {
+            // accelerating
+            motor_target_ticks = enc_by_intr(ramp_interrupt_counter, ramp_acceleration_enc_per_intr_gibi, 0, ramp_start_position);
+        } else if (ramp_interrupt_counter < constant_velocity_end_interrupt_count) {
+            // constant velocity
+            int32_t constant_counter = ramp_interrupt_counter - acceleration_end_interrupt_count;
+            motor_target_ticks = enc_by_intr(constant_counter, 0, ramp_velocity_enc_per_intr_mibi, ramp_acceleration_end_position);
+        } else if (ramp_interrupt_counter < deceleration_end_interrupt_count) {
+            // decelerating
+            int32_t deceleration_counter = ramp_interrupt_counter - constant_velocity_end_interrupt_count;
+            motor_target_ticks = enc_by_intr(deceleration_counter, -ramp_acceleration_enc_per_intr_gibi, ramp_velocity_enc_per_intr_mibi, ramp_constant_velocity_end_position);
+        } else {
             // drive is done, disable counters, such that they dont go crazy when they overflow
             ramp_done = true;
         }
@@ -110,17 +110,17 @@ ICACHE_RAM_ATTR void interrupt_handler() {
 
     // we keep driving the motor to hold position as long as we didnt detect overload
     if (!ramp_overload) {
-    motor_step(encoder_increments);
+        motor_step(encoder_increments);
 
         if (abs(motor_delta_ticks) > ramp_max_motor_following_error_enc) {
             ramp_overload = true;
             motor_overload();
         }
 
-    uint32_t pins_out = PIN_OUT;
-    SET_BIT_IF(pins_out, MOTOR_CONTROL_1, motor_out_a)
-    SET_BIT_IF(pins_out, MOTOR_CONTROL_2, motor_out_b)
-    PIN_OUT = pins_out;
+        uint32_t pins_out = PIN_OUT;
+        SET_BIT_IF(pins_out, MOTOR_CONTROL_1, motor_out_a)
+        SET_BIT_IF(pins_out, MOTOR_CONTROL_2, motor_out_b)
+        PIN_OUT = pins_out;
     }
 
     uint32_t end_ticks = get_clock_ticks();
@@ -247,6 +247,7 @@ void setup()
     pinMode(ENCODER_B, INPUT_PULLUP);
 
     motor_setup(2);
+    button_setup();
 
     rad_to_enc_mot = encoder_increments_per_rotation / (2 * pi);
     mm_to_rot_winch = 1.0 / winch_diameter / pi;
