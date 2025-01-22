@@ -3,9 +3,20 @@
 #include <math.h>
 #include <stdlib.h>
 
-// The way we are interpreting the encoder signals we get 4 increments per magnetic pulse
-float encoder_increments_per_rotation = 7.0 * 4;
-float gear_ratio = 29.125; // from datasheet it is 30, but when i wind it 10x i observe 8155 increments
+float encoder_increments_per_rotation = 0.0;
+float gear_ratio = 0.0;
+
+// maximum acceleration, assuming we aim to go from 0 to 100 rpm in 1 s
+// a = 100 rpm / 1s = 100.0 / 60.0 rotations / 1s / 1s = 100.0 / 60.0 * (2 * pi) [rad / s^2]
+// Note, this applies at the winch!
+float a_winch = 50.0 / 60.0 * (2 * pi);  // [rad / s^2]
+// TODO: reduced 100.0 to 50.0 to accomodate 200g weight
+
+// acceleration at the motor, derived value, calculated in motor_setup()
+float a_motor = 0.0;
+
+// maximum velocity, assuming 100 rpm
+float v_max_winch = 100.0 / 60.0 * (2 * pi);  // [rad/s]
 
 uint32_t motor_pwm_steps = 3;
 int32_t motor_on_counter = 0;
@@ -16,6 +27,20 @@ int32_t motor_out_b = 0;
 int32_t motor_target_ticks = 0;
 int32_t motor_delta_ticks = 0;
 
+
+void motor_setup(int motor_type) {
+    if (motor_type == 1) {
+        // The way we are interpreting the encoder signals we get 4 increments per magnetic pulse
+        encoder_increments_per_rotation = 7.0 * 4;
+        gear_ratio = 29.125; // from datasheet it is 30, but when i wind it 10x i observe 8155 increments
+    } else if (motor_type == 2) {
+        // measured 19758 increments for 10 rounds
+        encoder_increments_per_rotation = 11.0 * 4;
+        gear_ratio = 44.9; // 45 according to datasheet
+    }
+
+    a_motor = a_winch * gear_ratio;;
+}
 
 ICACHE_RAM_ATTR void motor_step(int32_t current_position) {
     if (motor_target_ticks == 0) {
@@ -56,16 +81,10 @@ ICACHE_RAM_ATTR void motor_step(int32_t current_position) {
     }
 }
 
-// maximum acceleration, assuming we aim to go from 0 to 100 rpm in 1 s
-// a = 100 rpm / 1s = 100.0 / 60.0 rotations / 1s / 1s = 100.0 / 60.0 * (2 * pi) [rad / s^2]
-// Note, this applies at the winch!
-float a_winch = 100.0 / 60.0 * (2 * pi);  // [rad / s^2]
-
-// acceleration at the motor
-float a_motor = a_winch * gear_ratio;
-
-// maximum velocity, assuming 100 rpm
-float v_max_winch = 100.0 / 60.0 * (2 * pi);  // [rad/s]
+ICACHE_RAM_ATTR inline void motor_overload() {
+    motor_out_a = 0;
+    motor_out_b = 0;
+}
 
 
 void calculate_ramp_times(float position_offset, float start_velocity, float max_velocity, float max_acceleration, float* t_a, float* t_v, float* t_d) {
