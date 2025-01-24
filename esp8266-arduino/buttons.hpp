@@ -49,17 +49,33 @@ void button_setup() {
     };
 
     float lowside_resistor_ohms = 1000.0;
-    float base_emmiter_drop_volts = 0.6;
+    float topside_resistor_ohms = 100000.0;
+    float base_emmiter_drop_volts = 0.65;
     float input_volts = 3.3;
+    float offset = -0.06;
+
+    // some short names for the formulas:
+    float* ras = &resistor_ladder_ohms[0];
+    float rb = topside_resistor_ohms;
+    float rl = lowside_resistor_ohms;
+    float ui = input_volts;
+    float ut = base_emmiter_drop_volts;
 
     for (int i = 0; i < button_count; i++) {
-        float divisor = resistor_ladder_ohms[i] / lowside_resistor_ohms + 1.0;
-        float denominator = input_volts - base_emmiter_drop_volts;
+        float denominator = ui - ut + (ras[i] * ui) / rb;
+        float divisor = 1 + ras[i] / rl + ras[i] / rb;
+        float value = denominator / divisor + offset;
+        int value_millivolts = (int) (1000.0 * value);
 
-        int value_millivolts = (int) (100.0 * denominator / divisor);
+        int lower = value_millivolts - 50;
+        int upper = value_millivolts + 50;
 
-        button_voltage_ranges[i][0] = value_millivolts - 50;
-        button_voltage_ranges[i][1] = value_millivolts + 50;
+        button_voltage_ranges[i][0] = lower;
+        button_voltage_ranges[i][1] = upper;
+
+        if (debug) {
+            Serial.printf("Button %d voltage mid %d range %d - %d\n", i + 1, value_millivolts, lower, upper);
+        }
     }
 }
 

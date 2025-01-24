@@ -9,15 +9,29 @@ resistor_ladder_ohms = [
 ]
 
 lowside_resistor_ohms = 1000.0
-
-base_emmiter_drop_volts = 0.6
-
+topside_resistor_ohms = 100000.0
+base_emmiter_drop_volts = 0.65
 input_volts = 3.3
+offset = -0.06
+
+# some short names for the formulas:
+
+ras = resistor_ladder_ohms
+rb = topside_resistor_ohms
+rl = lowside_resistor_ohms
+ui = input_volts
+ut = base_emmiter_drop_volts
+
 
 for i in range(button_count):
-    divisor = resistor_ladder_ohms[i] / lowside_resistor_ohms + 1
-    denominator = input_volts - base_emmiter_drop_volts
+    denominator = ui - ut + (ras[i] * ui) / rb
+    divisor = 1 + ras[i] / rl + ras[i] / rb
 
-    value = denominator / divisor
+    value = denominator / divisor + offset
 
-    print(f"{i} => {value}")
+    value_millivolts = int(1000.0 * value)
+
+    lower = value_millivolts - 50
+    upper = value_millivolts + 50
+
+    print(f"{i} => {value} => [{lower} - {upper}]")
