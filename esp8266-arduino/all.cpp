@@ -224,6 +224,40 @@ void print_encoder_pos() {
 }
 
 
+void blink_led(int seconds) {
+    for (int i = 0; i < seconds; i++) {
+        digitalWrite(OUTPUT_LED, HIGH);
+        delay(500);
+        digitalWrite(OUTPUT_LED, LOW);
+        delay(500);
+    }
+}
+
+
+void wait_drive_go_sleep() {
+
+    uint32_t interval_ms = 100;
+    uint32_t max_wait_ms = 10000;
+
+    uint32_t waited_ms = 0;
+
+    while (waited_ms < max_wait_ms) {
+        if (ramp_done) {
+            break;
+        }
+        delay(interval_ms);
+        waited_ms += interval_ms;
+    }
+
+    if (debug) {
+        Serial.printf("Going to sleep ...");
+    }
+
+    // go sleep forever
+    ESP.deepSleep(0);
+}
+
+
 uint32_t setup_end_ticks = 0;
 
 void setup()
@@ -278,14 +312,17 @@ void setup()
     //   interrupt ticks: 576 corresponding to 45.000000 % load
     // ... some optimizations
 
-    pinMode(BUTTON_RESET, OUTPUT);
-    digitalWrite(BUTTON_RESET, LOW);
+    pinMode(OUTPUT_LED, OUTPUT);
+    digitalWrite(OUTPUT_LED, LOW);
 
     pinMode(MOTOR_CONTROL_1, OUTPUT);
     digitalWrite(MOTOR_CONTROL_1, LOW);
 
     pinMode(MOTOR_CONTROL_2, OUTPUT);
     digitalWrite(MOTOR_CONTROL_2, LOW);
+
+    int analog_value = analogRead(A0);
+    Serial.printf("Initial analog value: %d\n", analog_value);
 
     Serial.println("Setup complete");
     setup_end_ticks = get_clock_ticks();
@@ -349,20 +386,25 @@ void loop()
             } else {
                 // hmm
             }
-            digitalWrite(BUTTON_RESET, HIGH);
-            delay(200);
-            digitalWrite(BUTTON_RESET, LOW);
         }
     }
     else if (state == STATE_1)
     {
         //long_term_test();
 
+        blink_led(10);
+        setup_drive(100.0);
+        wait_drive_go_sleep();
+        
         state = STATE_INITIAL;
     }
     else if (state == STATE_2)
     {
         //print_encoder_pos();
+
+        blink_led(20);
+        setup_drive(100.0);
+        wait_drive_go_sleep();
 
         state = STATE_INITIAL;
     }

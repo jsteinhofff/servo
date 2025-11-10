@@ -52,7 +52,7 @@ void button_setup() {
     float topside_resistor_ohms = 100000.0;
     float base_emmiter_drop_volts = 0.65;
     float input_volts = 3.3;
-    float offset = -0.06;
+    float offset = -0.1;
 
     // some short names for the formulas:
     float* ras = &resistor_ladder_ohms[0];

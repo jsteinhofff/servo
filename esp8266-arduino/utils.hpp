@@ -3,7 +3,7 @@
 
 #define ENCODER_A 4
 #define ENCODER_B 5
-#define BUTTON_RESET 12
+#define OUTPUT_LED 12
 #define MOTOR_CONTROL_1 13
 #define MOTOR_CONTROL_2 14
 
